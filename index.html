@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Love Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+</head>
+<body>
+<div class="container">
+
+<div id="login">
+  <h2><span class="material-symbols-outlined">login</span> Kirish</h2>
+  <input type="text" id="username" placeholder="Foydalanuvchi nomi" />
+  <input type="password" id="password" placeholder="Parol" />
+  <button id="login-btn"><span class="material-symbols-outlined">login</span> Kirish</button>
+  <div id="login-error" style="color:red;"></div>
+</div>
+
+<div id="chat">
+  <div id="last-active">Oxirgi faollik: -</div>
+  <div id="messages"></div>
+  <div id="message-input">
+    <input type="text" id="msg" placeholder="Xabar yozing..." autocomplete="off" />
+    <label for="file-input" id="upload-label">
+      <span class="material-symbols-outlined">attach_file</span>
+    </label>
+    <input type="file" id="file-input" accept="image/*" style="display:none;" />
+    <button id="send-btn"><span class="material-symbols-outlined">send</span></button>
+  </div>
+  <button id="logout-btn"><span class="material-symbols-outlined">logout</span> Chiqish</button>
+</div>
+
+</div>
+
+<script>
+  const loginDiv = document.getElementById('login');
+  const chatDiv = document.getElementById('chat');
+  const loginBtn = document.getElementById('login-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+  const loginError = document.getElementById('login-error');
+  const messagesDiv = document.getElementById('messages');
+  const lastActiveDiv = document.getElementById('last-active');
+  const msgInput = document.getElementById('msg');
+  const sendBtn = document.getElementById('send-btn');
+  const fileInput = document.getElementById('file-input');
+
+  let ws = null;
+  let username = null;
+
+  // Restore session from localStorage if present
+  window.addEventListener("DOMContentLoaded", () => {
+    const savedUser = localStorage.getItem("chat_user");
+    if (savedUser) {
+      username = savedUser;
+      loginDiv.style.display = 'none';
+      chatDiv.style.display = 'flex';
+      connectWebSocket();
+    }
+  });
+
+  loginBtn.onclick = async () => {
+    const user = document.getElementById('username').value.trim().toLowerCase();
+    const pass = document.getElementById('password').value.trim();
+    if (!user || !pass) {
+      loginError.textContent = "Iltimos, login va parolni kiriting";
+      return;
+    }
+    try {
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        loginError.textContent = err.detail || "Xato";
+        return;
+      }
+      const data = await res.json();
+      username = data.username;
+      localStorage.setItem("chat_user", username);
+      loginDiv.style.display = 'none';
+      chatDiv.style.display = 'flex';
+      connectWebSocket();
+    } catch (e) {
+      loginError.textContent = "Server bilan bog'lanishda xato";
+    }
+  };
+
+  logoutBtn.onclick = () => {
+    localStorage.removeItem("chat_user");
+    if (ws) ws.close();
+    username = null;
+    chatDiv.style.display = 'none';
+    loginDiv.style.display = 'block';
+    messagesDiv.innerHTML = '';
+    lastActiveDiv.textContent = "Oxirgi faollik: -";
+    msgInput.value = '';
+    fileInput.value = '';
+  };
+
+  function connectWebSocket() {
+    ws = new WebSocket(`ws://${window.location.host}/ws/${username}`);
+    ws.onopen = () => console.log("WebSocket ulandi");
+    ws.onclose = () => console.log("WebSocket uzildi");
+    ws.onerror = e => console.log("WebSocket xato:", e);
+    ws.onmessage = e => {
+      const data = JSON.parse(e.data);
+      if (Array.isArray(data.history)) {
+        messagesDiv.innerHTML = '';
+        data.history.forEach(msg => addMessage(msg));
+      } else {
+        addMessage(data);
+      }
+      if(data.last_active) {
+        updateLastActiveFromServer(data.last_active);
+      }
+    };
+  }
+
+  function addMessage(data) {
+    const div = document.createElement('div');
+    const time = new Date(data.timestamp * 1000).toLocaleTimeString();
+
+    const isBoss = data.from === "Umidjon";
+    div.style.textAlign = isBoss ? 'right' : 'left';
+    div.style.marginBottom = '10px';
+    div.style.maxWidth = '80%';
+
+    const color = isBoss ? 'blue' : 'red';
+
+    if (data.type === 'image') {
+      div.innerHTML = `<span class="sender" style="color:${color}; font-weight:bold;">${data.from}:</span><br>
+                       <img src="${data.content}" alt="Rasm" style="max-width:200px; max-height:150px; border-radius:5px;" /><br>
+                       <small>${time}</small>`;
+    } else {
+      div.innerHTML = `<span class="sender" style="color:${color}; font-weight:bold;">${data.from}:</span> 
+                       <span style="color:${color};">${data.content}</span> 
+                       <small>${time}</small>`;
+    }
+
+    div.className = `message ${isBoss ? 'boss' : 'mylove'}`;
+    messagesDiv.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  function updateLastActiveFromServer(lastActive) {
+    const formatTime = timestamp =>
+      new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+
+    const bossText = lastActive.boss === true
+      ? "Umidjon: Online"
+      : lastActive.boss ? `Umidjon oxirgi faolligi: ${formatTime(lastActive.boss)}` : "Umidjon: -";
+
+    const myLoveText = lastActive.mylove === true
+      ? "Dilnavoz: Online"
+      : lastActive.mylove ? `Dilnavoz oxirgi faolligi: ${formatTime(lastActive.mylove)}` : "Dilnavoz: -";
+
+    lastActiveDiv.innerText = bossText + "\n" + myLoveText;
+  }
+
+  sendBtn.onclick = async () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const text = msgInput.value.trim();
+    const file = fileInput.files[0];
+
+    if (!text && !file) return;
+
+    if (file) {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch('/upload-image', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error("Rasm yuklanmadi");
+        const data = await res.json();
+
+        ws.send(JSON.stringify({ type: 'image', content: data.url }));
+        fileInput.value = '';
+      } catch (e) {
+        alert(e.message);
+        return;
+      }
+    }
+
+    if (text) {
+      ws.send(JSON.stringify({ type: 'message', content: text }));
+      msgInput.value = '';
+    }
+  };
+
+  msgInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      sendBtn.click();
+    }
+  });
+</script>
+
+</body>
+</html>
